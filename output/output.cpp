@@ -79,7 +79,7 @@ void Output::OutputReady(void *mem, size_t size, int64_t timestamp_us, bool keyf
 		timestampReady(last_timestamp_);
 	}
 
-	if (!options_->Get().metadata.empty())
+	if (!options_->Get().metadata.empty() && !metadata_queue_.empty())
 	{
 		libcamera::ControlList metadata = metadata_queue_.front();
 		write_metadata(buf_metadata_, options_->Get().metadata_format, metadata, !metadata_started_);
