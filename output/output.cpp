@@ -5,6 +5,7 @@
  * output.cpp - video stream output base class
  */
 
+#include <chrono>
 #include <cinttypes>
 #include <stdexcept>
 
@@ -15,7 +16,7 @@
 
 Output::Output(VideoOptions const *options)
 	: options_(options), fp_timestamps_(nullptr), state_(WAITING_KEYFRAME), time_offset_(0), last_timestamp_(0),
-	  buf_metadata_(std::cout.rdbuf()), of_metadata_()
+	  buf_metadata_(std::cout.rdbuf()), of_metadata_(), last_metadata_flush_{}
 {
 	if (!options->Get().save_pts.empty())
 	{
@@ -84,6 +85,17 @@ void Output::OutputReady(void *mem, size_t size, int64_t timestamp_us, bool keyf
 		write_metadata(buf_metadata_, options_->Get().metadata_format, metadata, !metadata_started_);
 		metadata_started_ = true;
 		metadata_queue_.pop();
+		if (options_->Get().flush && of_metadata_.is_open())
+		{
+			auto interval_ms = options_->Get().metadata_flush_interval;
+			auto now = std::chrono::steady_clock::now();
+			if (interval_ms == 0 ||
+			    now - last_metadata_flush_ >= std::chrono::milliseconds(interval_ms))
+			{
+				of_metadata_.flush();
+				last_metadata_flush_ = now;
+			}
+		}
 	}
 }
 

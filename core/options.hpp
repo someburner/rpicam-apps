@@ -249,6 +249,7 @@ struct OptsInternal
 	bool af_on_capture;
 	std::string metadata;
 	std::string metadata_format;
+	unsigned int metadata_flush_interval;
 	std::string hdr;
 	TimeVal<std::chrono::microseconds> flicker_period;
 	bool no_raw;

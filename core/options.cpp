@@ -323,6 +323,8 @@ Options::Options()
 			"Save captured image metadata to a file or \"-\" for stdout")
 		("metadata-format", value<std::string>(&v_->metadata_format)->default_value("json"),
 			"Format to save the metadata in, either txt or json (requires --metadata)")
+		("metadata-flush-interval", value<unsigned int>(&v_->metadata_flush_interval)->default_value(500),
+			"Interval in milliseconds between flushing the metadata file to disk (0 = every frame, requires --flush)")
 		("flicker-period", value<std::string>(&v_->flicker_period_)->default_value("0s"),
 			"Manual flicker correction period"
 			"\nSet to 10000us to cancel 50Hz flicker."
@@ -756,6 +758,7 @@ void OptsInternal::Print() const
 		std::cerr << "    viewfinder-buffer-count: " << viewfinder_buffer_count << std::endl;
 	std::cerr << "    metadata: " << metadata << std::endl;
 	std::cerr << "    metadata-format: " << metadata_format << std::endl;
+	std::cerr << "    metadata-flush-interval: " << metadata_flush_interval << std::endl;
 }
 
 bool OptsInternal::ParseVideo()

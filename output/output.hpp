@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <cstdio>
 
 #include <atomic>
@@ -51,6 +52,7 @@ private:
 	std::ofstream of_metadata_;
 	bool metadata_started_ = false;
 	std::queue<libcamera::ControlList> metadata_queue_;
+	std::chrono::steady_clock::time_point last_metadata_flush_;
 };
 
 void start_metadata_output(std::streambuf *buf, std::string fmt);
