@@ -193,9 +193,10 @@ void LibAvEncoder::initVideoCodec(VideoOptions const *options, StreamInfo const 
 	const char *format = nullptr;
 	if (options->Get().libav_format.empty())
 	{
-		// Check if output_file_ starts with a "tcp://" or "udp://" url.
-		// C++ 20 has a convenient starts_with() function for this which we may eventually use.		
+		// Check if output_file_ starts with a "tcp://" or "udp://" url, or is stdout ("-").
+		// C++ 20 has a convenient starts_with() function for this which we may eventually use.
 		if (output_file_.empty() ||
+			output_file_ == "-" ||
 			output_file_.find(tcp.c_str(), 0, tcp.length()) != std::string::npos ||
 			output_file_.find(udp.c_str(), 0, udp.length()) != std::string::npos)
 		{
@@ -220,7 +221,8 @@ void LibAvEncoder::initVideoCodec(VideoOptions const *options, StreamInfo const 
 
 	elementary_stream_ = (options->Get().libav_format.empty() || options->Get().libav_format == "h264") &&
 						 !output_file_.empty() &&
-						 (output_file_.find("264", output_file_.length() - 3) != std::string::npos ||
+						 (output_file_ == "-" ||
+						  output_file_.find("264", output_file_.length() - 3) != std::string::npos ||
 						  output_file_.find("h264", output_file_.length() - 4) != std::string::npos);
 
 	if (!elementary_stream_ && (options->Get().circular || options->Get().segment || !options->Get().save_pts.empty() ||
