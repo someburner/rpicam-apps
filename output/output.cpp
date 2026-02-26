@@ -7,12 +7,17 @@
 
 #include <chrono>
 #include <cinttypes>
+#include <filesystem>
 #include <stdexcept>
+
+#include <libcamera/control_ids.h>
 
 #include "circular_output.hpp"
 #include "file_output.hpp"
 #include "net_output.hpp"
 #include "output.hpp"
+
+namespace fs = std::filesystem;
 
 Output::Output(VideoOptions const *options)
 	: options_(options), fp_timestamps_(nullptr), state_(WAITING_KEYFRAME), time_offset_(0), last_timestamp_(0),
@@ -25,15 +30,22 @@ Output::Output(VideoOptions const *options)
 			throw std::runtime_error("Failed to open timestamp file " + options->Get().save_pts);
 		fprintf(fp_timestamps_, "# timecode format v2\n");
 	}
-	if (!options->Get().metadata.empty())
+	if (options->Get().MetadataEnabled())
 	{
-		const std::string &filename = options_->Get().metadata;
-
-		if (filename.compare("-"))
+		const std::string &fmt = options_->Get().metadata_format;
+		if (fmt == "jsonl")
 		{
-			of_metadata_.open(filename, std::ios::out);
-			buf_metadata_ = of_metadata_.rdbuf();
-			start_metadata_output(buf_metadata_, options_->Get().metadata_format);
+			fs::create_directories(options_->Get().metadata_dir);
+		}
+		else
+		{
+			const std::string &filename = options_->Get().metadata;
+			if (filename.compare("-"))
+			{
+				of_metadata_.open(filename, std::ios::out);
+				buf_metadata_ = of_metadata_.rdbuf();
+				start_metadata_output(buf_metadata_, fmt);
+			}
 		}
 	}
 
@@ -44,8 +56,13 @@ Output::~Output()
 {
 	if (fp_timestamps_)
 		fclose(fp_timestamps_);
-	if (!options_->Get().metadata.empty())
-		stop_metadata_output(buf_metadata_, options_->Get().metadata_format);
+	if (options_->Get().MetadataEnabled())
+	{
+		if (options_->Get().metadata_format != "jsonl")
+			stop_metadata_output(buf_metadata_, options_->Get().metadata_format);
+		else if (of_jsonl_.is_open())
+			of_jsonl_.close();
+	}
 }
 
 void Output::Signal()
@@ -79,12 +96,88 @@ void Output::OutputReady(void *mem, size_t size, int64_t timestamp_us, bool keyf
 		timestampReady(last_timestamp_);
 	}
 
-	if (!options_->Get().metadata.empty() && !metadata_queue_.empty())
+	if (!options_->Get().MetadataEnabled() || metadata_queue_.empty())
+		return;
+
+	const std::string &fmt = options_->Get().metadata_format;
+	libcamera::ControlList metadata = metadata_queue_.front();
+	metadata_queue_.pop();
+
+	if (fmt == "jsonl")
 	{
-		libcamera::ControlList metadata = metadata_queue_.front();
-		write_metadata(buf_metadata_, options_->Get().metadata_format, metadata, !metadata_started_);
+		// Bucket epoch (seconds) from FrameWallClock (nanoseconds); bucket aligns to rotate interval.
+		auto fwc = metadata.get(libcamera::controls::FrameWallClock);
+		int64_t fwc_ns = fwc ? *fwc : 0;
+		int64_t sec = fwc_ns / 1000000000;
+		unsigned int rotate_secs = options_->Get().metadata_rotate_secs;
+		int64_t bucket_epoch_sec = (sec / static_cast<int64_t>(rotate_secs)) * rotate_secs;
+
+		// Ensure the right bucket file is open; close previous and cleanup old buckets.
+		if (of_jsonl_.is_open() && current_jsonl_bucket_epoch_ != bucket_epoch_sec)
+		{
+			of_jsonl_.close();
+			current_jsonl_bucket_epoch_ = -1;
+		}
+		if (!of_jsonl_.is_open())
+		{
+			fs::path dir(options_->Get().metadata_dir);
+			fs::path path = dir / (std::to_string(bucket_epoch_sec) + ".jsonl");
+			of_jsonl_.open(path, std::ios::out | std::ios::app);
+			if (!of_jsonl_)
+				throw std::runtime_error("Failed to open metadata JSONL file " + path.string());
+			current_jsonl_bucket_epoch_ = bucket_epoch_sec;
+
+			// Remove bucket files older than max_mins.
+			unsigned int max_mins = options_->Get().metadata_max_mins;
+			if (max_mins > 0)
+			{
+				int64_t cutoff_epoch = bucket_epoch_sec - static_cast<int64_t>(max_mins) * 60;
+				try
+				{
+					for (const auto &entry : fs::directory_iterator(dir))
+					{
+						if (!entry.is_regular_file())
+							continue;
+						std::string name = entry.path().filename().string();
+						if (name.size() < 6 || name.compare(name.size() - 5, 5, ".jsonl") != 0)
+							continue;
+						std::string base = name.substr(0, name.size() - 6);
+						int64_t epoch = 0;
+						try
+						{
+							epoch = std::stoll(base);
+						}
+						catch (...)
+						{
+							continue;
+						}
+						if (epoch < cutoff_epoch)
+							fs::remove(entry.path());
+					}
+				}
+				catch (const fs::filesystem_error &)
+				{
+					// Ignore cleanup errors (e.g. permission, concurrent delete).
+				}
+			}
+		}
+		write_metadata_jsonl_line(of_jsonl_, metadata);
+		if (options_->Get().flush)
+		{
+			auto interval_ms = options_->Get().metadata_flush_interval;
+			auto now = std::chrono::steady_clock::now();
+			if (interval_ms == 0 ||
+			    now - last_metadata_flush_ >= std::chrono::milliseconds(interval_ms))
+			{
+				of_jsonl_.flush();
+				last_metadata_flush_ = now;
+			}
+		}
+	}
+	else
+	{
+		write_metadata(buf_metadata_, fmt, metadata, !metadata_started_);
 		metadata_started_ = true;
-		metadata_queue_.pop();
 		if (options_->Get().flush && of_metadata_.is_open())
 		{
 			auto interval_ms = options_->Get().metadata_flush_interval;
@@ -129,7 +222,7 @@ Output *Output::Create(VideoOptions const *options)
 
 void Output::MetadataReady(libcamera::ControlList &metadata)
 {
-	if (options_->Get().metadata.empty())
+	if (!options_->Get().MetadataEnabled())
 		return;
 
 	metadata_queue_.push(metadata);
@@ -152,6 +245,10 @@ void write_metadata(std::streambuf *buf, std::string fmt, libcamera::ControlList
 			out << id_map->at(id)->name() << "=" << val.toString() << std::endl;
 		out << std::endl;
 	}
+	else if (fmt == "jsonl")
+	{
+		write_metadata_jsonl_line(out, metadata);
+	}
 	else
 	{
 		if (!first_write)
@@ -167,6 +264,21 @@ void write_metadata(std::streambuf *buf, std::string fmt, libcamera::ControlList
 		}
 		out << std::endl << "}";
 	}
+}
+
+void write_metadata_jsonl_line(std::ostream &out, libcamera::ControlList &metadata)
+{
+	const libcamera::ControlIdMap *id_map = metadata.idMap();
+	out << "{";
+	bool first_done = false;
+	for (auto const &[id, val] : metadata)
+	{
+		std::string arg_quote = (val.toString().find('/') != std::string::npos) ? "\"" : "";
+		out << (first_done ? "," : "") << "\"" << id_map->at(id)->name() << "\": " << arg_quote
+		    << val.toString() << arg_quote;
+		first_done = true;
+	}
+	out << "}\n";
 }
 
 void stop_metadata_output(std::streambuf *buf, std::string fmt)

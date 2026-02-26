@@ -9,6 +9,7 @@
 
 #include <chrono>
 #include <cstdio>
+#include <fstream>
 
 #include <atomic>
 
@@ -50,6 +51,8 @@ private:
 	int64_t last_timestamp_;
 	std::streambuf *buf_metadata_;
 	std::ofstream of_metadata_;
+	std::ofstream of_jsonl_;
+	int64_t current_jsonl_bucket_epoch_ = -1;
 	bool metadata_started_ = false;
 	std::queue<libcamera::ControlList> metadata_queue_;
 	std::chrono::steady_clock::time_point last_metadata_flush_;
@@ -57,4 +60,5 @@ private:
 
 void start_metadata_output(std::streambuf *buf, std::string fmt);
 void write_metadata(std::streambuf *buf, std::string fmt, libcamera::ControlList &metadata, bool first_write);
+void write_metadata_jsonl_line(std::ostream &out, libcamera::ControlList &metadata);
 void stop_metadata_output(std::streambuf *buf, std::string fmt);

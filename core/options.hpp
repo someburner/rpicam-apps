@@ -249,7 +249,18 @@ struct OptsInternal
 	bool af_on_capture;
 	std::string metadata;
 	std::string metadata_format;
+	std::string metadata_dir;
+	unsigned int metadata_rotate_secs;
+	unsigned int metadata_max_mins;
 	unsigned int metadata_flush_interval;
+
+	// True if metadata output is enabled (either --metadata for json/txt or --metadata-dir for jsonl).
+	bool MetadataEnabled() const
+	{
+		if (metadata_format == "jsonl")
+			return !metadata_dir.empty();
+		return !metadata.empty();
+	}
 	std::string hdr;
 	TimeVal<std::chrono::microseconds> flicker_period;
 	bool no_raw;

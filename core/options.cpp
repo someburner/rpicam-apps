@@ -322,7 +322,13 @@ Options::Options()
 		("metadata", value<std::string>(&v_->metadata),
 			"Save captured image metadata to a file or \"-\" for stdout")
 		("metadata-format", value<std::string>(&v_->metadata_format)->default_value("json"),
-			"Format to save the metadata in, either txt or json (requires --metadata)")
+			"Format to save the metadata in: txt, json, or jsonl (jsonl requires --metadata-dir)")
+		("metadata-dir", value<std::string>(&v_->metadata_dir),
+			"Directory for JSONL metadata buckets (required when --metadata-format=jsonl)")
+		("metadata-rotate-secs", value<unsigned int>(&v_->metadata_rotate_secs)->default_value(30),
+			"Bucket rotation interval in seconds for JSONL (default 30, must be > 0)")
+		("metadata-max-mins", value<unsigned int>(&v_->metadata_max_mins)->default_value(60),
+			"Retention in minutes for JSONL buckets (default 60)")
 		("metadata-flush-interval", value<unsigned int>(&v_->metadata_flush_interval)->default_value(500),
 			"Interval in milliseconds between flushing the metadata file to disk (0 = every frame, requires --flush)")
 		("flicker-period", value<std::string>(&v_->flicker_period_)->default_value("0s"),
@@ -673,8 +679,18 @@ bool OptsInternal::Parse(boost::program_options::variables_map &vm, RPiCamApp *a
 		metadata_format = "json";
 	else if (strcasecmp(metadata_format.c_str(), "txt") == 0)
 		metadata_format = "txt";
+	else if (strcasecmp(metadata_format.c_str(), "jsonl") == 0)
+		metadata_format = "jsonl";
 	else
 		throw std::runtime_error("unrecognised metadata format " + metadata_format);
+
+	if (metadata_format == "jsonl")
+	{
+		if (metadata_dir.empty())
+			throw std::runtime_error("metadata-format jsonl requires --metadata-dir");
+		if (metadata_rotate_secs == 0)
+			throw std::runtime_error("metadata-rotate-secs must be greater than 0");
+	}
 
 	mode = Mode(mode_string);
 	viewfinder_mode = Mode(viewfinder_mode_string);
@@ -758,6 +774,12 @@ void OptsInternal::Print() const
 		std::cerr << "    viewfinder-buffer-count: " << viewfinder_buffer_count << std::endl;
 	std::cerr << "    metadata: " << metadata << std::endl;
 	std::cerr << "    metadata-format: " << metadata_format << std::endl;
+	if (metadata_format == "jsonl")
+	{
+		std::cerr << "    metadata-dir: " << metadata_dir << std::endl;
+		std::cerr << "    metadata-rotate-secs: " << metadata_rotate_secs << std::endl;
+		std::cerr << "    metadata-max-mins: " << metadata_max_mins << std::endl;
+	}
 	std::cerr << "    metadata-flush-interval: " << metadata_flush_interval << std::endl;
 }
 

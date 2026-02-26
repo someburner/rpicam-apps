@@ -109,7 +109,7 @@ private:
 			if (encode_buffer_queue_.empty())
 				throw std::runtime_error("no buffer available to return");
 			CompletedRequestPtr &completed_request = encode_buffer_queue_.front();
-			if (metadata_ready_callback_ && !GetOptions()->Get().metadata.empty())
+			if (metadata_ready_callback_ && GetOptions()->Get().MetadataEnabled())
 				metadata_ready_callback_(completed_request->metadata);
 			encode_buffer_queue_.pop(); // drop shared_ptr reference
 		}
