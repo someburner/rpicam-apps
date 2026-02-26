@@ -319,8 +319,8 @@ Options::Options()
 			"Enable High Dynamic Range, where supported. Available values are \"off\", \"auto\", "
 			"\"sensor\" for sensor HDR (e.g. for Camera Module 3), "
 			"\"single-exp\" for PiSP based single exposure multiframe HDR")
-		("metadata", value<std::string>(&v_->metadata),
-			"Save captured image metadata to a file or \"-\" for stdout")
+		("metadata", value<std::string>(&v_->metadata)->default_value("disable"),
+			"Save captured image metadata: file path, \"-\" for stdout, \"dir\" for JSONL to --metadata-dir, or \"disable\" (default)")
 		("metadata-format", value<std::string>(&v_->metadata_format)->default_value("json"),
 			"Format to save the metadata in: txt, json, or jsonl (jsonl requires --metadata-dir)")
 		("metadata-dir", value<std::string>(&v_->metadata_dir),
@@ -675,6 +675,11 @@ bool OptsInternal::Parse(boost::program_options::variables_map &vm, RPiCamApp *a
 	saturation = std::clamp(saturation, 0.0f, 15.99f); // limits are arbitrary..
 	sharpness = std::clamp(sharpness, 0.0f, 15.99f); // limits are arbitrary..
 
+	if (strcasecmp(metadata.c_str(), "disable") == 0)
+		metadata = "disable";
+	if (strcasecmp(metadata.c_str(), "dir") == 0)
+		metadata = "dir";
+
 	if (strcasecmp(metadata_format.c_str(), "json") == 0)
 		metadata_format = "json";
 	else if (strcasecmp(metadata_format.c_str(), "txt") == 0)
@@ -684,9 +689,17 @@ bool OptsInternal::Parse(boost::program_options::variables_map &vm, RPiCamApp *a
 	else
 		throw std::runtime_error("unrecognised metadata format " + metadata_format);
 
+	if (metadata == "dir")
+	{
+		if (metadata_format != "jsonl")
+			throw std::runtime_error("--metadata dir requires --metadata-format jsonl");
+		if (metadata_dir.empty())
+			throw std::runtime_error("--metadata dir requires --metadata-dir");
+	}
+
 	if (metadata_format == "jsonl")
 	{
-		if (metadata_dir.empty())
+		if (metadata != "disable" && metadata_dir.empty())
 			throw std::runtime_error("metadata-format jsonl requires --metadata-dir");
 		if (metadata_rotate_secs == 0)
 			throw std::runtime_error("metadata-rotate-secs must be greater than 0");

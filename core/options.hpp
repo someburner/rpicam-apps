@@ -254,10 +254,12 @@ struct OptsInternal
 	unsigned int metadata_max_mins;
 	unsigned int metadata_flush_interval;
 
-	// True if metadata output is enabled (either --metadata for json/txt or --metadata-dir for jsonl).
+	// True if metadata output is enabled (--metadata not "disable", and format-specific requirements).
 	bool MetadataEnabled() const
 	{
-		if (metadata_format == "jsonl")
+		if (metadata == "disable")
+			return false;
+		if (metadata == "dir")
 			return !metadata_dir.empty();
 		return !metadata.empty();
 	}
