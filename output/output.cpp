@@ -144,7 +144,7 @@ void Output::OutputReady(void *mem, size_t size, int64_t timestamp_us, bool keyf
 						if (!entry.is_regular_file())
 							continue;
 						std::string name = entry.path().filename().string();
-						if (name.size() < 6 || name.compare(name.size() - 5, 5, ".jsonl") != 0)
+						if (name.size() < 7 || name.compare(name.size() - 6, 6, ".jsonl") != 0)
 							continue;
 						std::string base = name.substr(0, name.size() - 6);
 						int64_t epoch = 0;
