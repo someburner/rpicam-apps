@@ -329,8 +329,8 @@ Options::Options()
 			"Bucket rotation interval in seconds for JSONL (default 30, must be > 0)")
 		("metadata-max-mins", value<unsigned int>(&v_->metadata_max_mins)->default_value(60),
 			"Retention in minutes for JSONL buckets (default 60)")
-		("metadata-flush-interval", value<unsigned int>(&v_->metadata_flush_interval)->default_value(500),
-			"Interval in milliseconds between flushing the metadata file to disk (0 = every frame, requires --flush)")
+		("metadata-flush-interval", value<unsigned int>(&v_->metadata_flush_interval)->default_value(0),
+			"Interval in milliseconds between flushing the metadata file to disk (default 0 = every frame, requires --flush)")
 		("flicker-period", value<std::string>(&v_->flicker_period_)->default_value("0s"),
 			"Manual flicker correction period"
 			"\nSet to 10000us to cancel 50Hz flicker."
