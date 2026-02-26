@@ -127,10 +127,15 @@ void Output::OutputReady(void *mem, size_t size, int64_t timestamp_us, bool keyf
 				throw std::runtime_error("Failed to open metadata JSONL file " + path.string());
 			current_jsonl_bucket_epoch_ = bucket_epoch_sec;
 
-			// Remove bucket files older than max_mins.
+			// Remove bucket files older than max_mins, at most once every 2 * rotate_secs.
 			unsigned int max_mins = options_->Get().metadata_max_mins;
-			if (max_mins > 0)
+			int64_t prune_interval_sec = static_cast<int64_t>(2 * rotate_secs);
+			bool should_prune = max_mins > 0 &&
+			                    (last_jsonl_prune_bucket_epoch_ < 0 ||
+			                     (bucket_epoch_sec - last_jsonl_prune_bucket_epoch_) >= prune_interval_sec);
+			if (should_prune)
 			{
+				last_jsonl_prune_bucket_epoch_ = bucket_epoch_sec;
 				int64_t cutoff_epoch = bucket_epoch_sec - static_cast<int64_t>(max_mins) * 60;
 				try
 				{

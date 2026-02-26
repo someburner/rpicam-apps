@@ -53,6 +53,7 @@ private:
 	std::ofstream of_metadata_;
 	std::ofstream of_jsonl_;
 	int64_t current_jsonl_bucket_epoch_ = -1;
+	int64_t last_jsonl_prune_bucket_epoch_ = -1;
 	bool metadata_started_ = false;
 	std::queue<libcamera::ControlList> metadata_queue_;
 	std::chrono::steady_clock::time_point last_metadata_flush_;
