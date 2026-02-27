@@ -127,6 +127,20 @@ void Output::OutputReady(void *mem, size_t size, int64_t timestamp_us, bool keyf
 				throw std::runtime_error("Failed to open metadata JSONL file " + path.string());
 			current_jsonl_bucket_epoch_ = bucket_epoch_sec;
 
+			// Stable path: current.jsonl symlink points to the active bucket (for tail -F).
+			fs::path link_path = dir / "current.jsonl";
+			fs::path target = path.filename();
+			try
+			{
+				if (fs::exists(link_path))
+					fs::remove(link_path);
+				fs::create_symlink(target, link_path);
+			}
+			catch (const fs::filesystem_error &)
+			{
+				// Ignore symlink errors (e.g. permission).
+			}
+
 			// Remove bucket files older than max_mins, at most once every 2 * rotate_secs.
 			unsigned int max_mins = options_->Get().metadata_max_mins;
 			int64_t prune_interval_sec = static_cast<int64_t>(2 * rotate_secs);
