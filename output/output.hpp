@@ -39,6 +39,12 @@ protected:
 	FILE *fp_timestamps_;
 
 private:
+	// Write a single libcamera metadata entry to the current JSONL bucket file, opening/rotating
+	// the bucket file as needed and pruning old buckets. Driven exclusively from MetadataReady,
+	// independent of the encoder output path, so it works even when the encoder does not invoke
+	// OutputReady (e.g. libav muxed formats like mpegts).
+	void writeMetadataJsonl(libcamera::ControlList &metadata);
+
 	enum State
 	{
 		DISABLED = 0,

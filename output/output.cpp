@@ -96,117 +96,120 @@ void Output::OutputReady(void *mem, size_t size, int64_t timestamp_us, bool keyf
 		timestampReady(last_timestamp_);
 	}
 
+	// JSONL metadata is written directly from MetadataReady (decoupled from encoder output),
+	// so we only drain the per-frame pairing queue here for the legacy txt/json formats.
 	if (!options_->Get().MetadataEnabled() || metadata_queue_.empty())
 		return;
 
 	const std::string &fmt = options_->Get().metadata_format;
+	if (fmt == "jsonl")
+		return;
+
 	libcamera::ControlList metadata = metadata_queue_.front();
 	metadata_queue_.pop();
 
-	if (fmt == "jsonl")
+	write_metadata(buf_metadata_, fmt, metadata, !metadata_started_);
+	metadata_started_ = true;
+	if (options_->Get().flush && of_metadata_.is_open())
 	{
-		// Bucket epoch (seconds) from FrameWallClock (nanoseconds); bucket aligns to rotate interval.
-		auto fwc = metadata.get(libcamera::controls::FrameWallClock);
-		int64_t fwc_ns = fwc ? *fwc : 0;
-		int64_t sec = fwc_ns / 1000000000;
-		unsigned int rotate_secs = options_->Get().metadata_rotate_secs;
-		int64_t bucket_epoch_sec = (sec / static_cast<int64_t>(rotate_secs)) * rotate_secs;
-
-		// Ensure the right bucket file is open; close previous and cleanup old buckets.
-		if (of_jsonl_.is_open() && current_jsonl_bucket_epoch_ != bucket_epoch_sec)
+		auto interval_ms = options_->Get().metadata_flush_interval;
+		auto now = std::chrono::steady_clock::now();
+		if (interval_ms == 0 ||
+		    now - last_metadata_flush_ >= std::chrono::milliseconds(interval_ms))
 		{
-			of_jsonl_.close();
-			current_jsonl_bucket_epoch_ = -1;
+			of_metadata_.flush();
+			last_metadata_flush_ = now;
 		}
-		if (!of_jsonl_.is_open())
-		{
-			fs::path dir(options_->Get().metadata_dir);
-			fs::path path = dir / (std::to_string(bucket_epoch_sec) + ".jsonl");
-			of_jsonl_.open(path, std::ios::out | std::ios::app);
-			if (!of_jsonl_)
-				throw std::runtime_error("Failed to open metadata JSONL file " + path.string());
-			current_jsonl_bucket_epoch_ = bucket_epoch_sec;
+	}
+}
 
-			// Stable path: current.jsonl symlink points to the active bucket (for tail -F).
-			fs::path link_path = dir / "current.jsonl";
-			fs::path target = path.filename();
+void Output::writeMetadataJsonl(libcamera::ControlList &metadata)
+{
+	// Bucket epoch (seconds) from FrameWallClock (nanoseconds); bucket aligns to rotate interval.
+	auto fwc = metadata.get(libcamera::controls::FrameWallClock);
+	int64_t fwc_ns = fwc ? *fwc : 0;
+	int64_t sec = fwc_ns / 1000000000;
+	unsigned int rotate_secs = options_->Get().metadata_rotate_secs;
+	int64_t bucket_epoch_sec = (sec / static_cast<int64_t>(rotate_secs)) * rotate_secs;
+
+	// Ensure the right bucket file is open; close previous and cleanup old buckets.
+	if (of_jsonl_.is_open() && current_jsonl_bucket_epoch_ != bucket_epoch_sec)
+	{
+		of_jsonl_.close();
+		current_jsonl_bucket_epoch_ = -1;
+	}
+	if (!of_jsonl_.is_open())
+	{
+		fs::path dir(options_->Get().metadata_dir);
+		fs::path path = dir / (std::to_string(bucket_epoch_sec) + ".jsonl");
+		of_jsonl_.open(path, std::ios::out | std::ios::app);
+		if (!of_jsonl_)
+			throw std::runtime_error("Failed to open metadata JSONL file " + path.string());
+		current_jsonl_bucket_epoch_ = bucket_epoch_sec;
+
+		// Stable path: current.jsonl symlink points to the active bucket (for tail -F).
+		fs::path link_path = dir / "current.jsonl";
+		fs::path target = path.filename();
+		try
+		{
+			if (fs::exists(link_path))
+				fs::remove(link_path);
+			fs::create_symlink(target, link_path);
+		}
+		catch (const fs::filesystem_error &)
+		{
+			// Ignore symlink errors (e.g. permission).
+		}
+
+		// Remove bucket files older than max_mins, at most once every 2 * rotate_secs.
+		unsigned int max_mins = options_->Get().metadata_max_mins;
+		int64_t prune_interval_sec = static_cast<int64_t>(2 * rotate_secs);
+		bool should_prune = max_mins > 0 &&
+		                    (last_jsonl_prune_bucket_epoch_ < 0 ||
+		                     (bucket_epoch_sec - last_jsonl_prune_bucket_epoch_) >= prune_interval_sec);
+		if (should_prune)
+		{
+			last_jsonl_prune_bucket_epoch_ = bucket_epoch_sec;
+			int64_t cutoff_epoch = bucket_epoch_sec - static_cast<int64_t>(max_mins) * 60;
 			try
 			{
-				if (fs::exists(link_path))
-					fs::remove(link_path);
-				fs::create_symlink(target, link_path);
+				for (const auto &entry : fs::directory_iterator(dir))
+				{
+					if (!entry.is_regular_file())
+						continue;
+					std::string name = entry.path().filename().string();
+					if (name.size() < 7 || name.compare(name.size() - 6, 6, ".jsonl") != 0)
+						continue;
+					std::string base = name.substr(0, name.size() - 6);
+					int64_t epoch = 0;
+					try
+					{
+						epoch = std::stoll(base);
+					}
+					catch (...)
+					{
+						continue;
+					}
+					if (epoch < cutoff_epoch)
+						fs::remove(entry.path());
+				}
 			}
 			catch (const fs::filesystem_error &)
 			{
-				// Ignore symlink errors (e.g. permission).
-			}
-
-			// Remove bucket files older than max_mins, at most once every 2 * rotate_secs.
-			unsigned int max_mins = options_->Get().metadata_max_mins;
-			int64_t prune_interval_sec = static_cast<int64_t>(2 * rotate_secs);
-			bool should_prune = max_mins > 0 &&
-			                    (last_jsonl_prune_bucket_epoch_ < 0 ||
-			                     (bucket_epoch_sec - last_jsonl_prune_bucket_epoch_) >= prune_interval_sec);
-			if (should_prune)
-			{
-				last_jsonl_prune_bucket_epoch_ = bucket_epoch_sec;
-				int64_t cutoff_epoch = bucket_epoch_sec - static_cast<int64_t>(max_mins) * 60;
-				try
-				{
-					for (const auto &entry : fs::directory_iterator(dir))
-					{
-						if (!entry.is_regular_file())
-							continue;
-						std::string name = entry.path().filename().string();
-						if (name.size() < 7 || name.compare(name.size() - 6, 6, ".jsonl") != 0)
-							continue;
-						std::string base = name.substr(0, name.size() - 6);
-						int64_t epoch = 0;
-						try
-						{
-							epoch = std::stoll(base);
-						}
-						catch (...)
-						{
-							continue;
-						}
-						if (epoch < cutoff_epoch)
-							fs::remove(entry.path());
-					}
-				}
-				catch (const fs::filesystem_error &)
-				{
-					// Ignore cleanup errors (e.g. permission, concurrent delete).
-				}
-			}
-		}
-		write_metadata_jsonl_line(of_jsonl_, metadata);
-		if (options_->Get().flush)
-		{
-			auto interval_ms = options_->Get().metadata_flush_interval;
-			auto now = std::chrono::steady_clock::now();
-			if (interval_ms == 0 ||
-			    now - last_metadata_flush_ >= std::chrono::milliseconds(interval_ms))
-			{
-				of_jsonl_.flush();
-				last_metadata_flush_ = now;
+				// Ignore cleanup errors (e.g. permission, concurrent delete).
 			}
 		}
 	}
-	else
+	write_metadata_jsonl_line(of_jsonl_, metadata);
+	if (options_->Get().flush)
 	{
-		write_metadata(buf_metadata_, fmt, metadata, !metadata_started_);
-		metadata_started_ = true;
-		if (options_->Get().flush && of_metadata_.is_open())
+		auto interval_ms = options_->Get().metadata_flush_interval;
+		auto now = std::chrono::steady_clock::now();
+		if (interval_ms == 0 ||
+		    now - last_metadata_flush_ >= std::chrono::milliseconds(interval_ms))
 		{
-			auto interval_ms = options_->Get().metadata_flush_interval;
-			auto now = std::chrono::steady_clock::now();
-			if (interval_ms == 0 ||
-			    now - last_metadata_flush_ >= std::chrono::milliseconds(interval_ms))
-			{
-				of_metadata_.flush();
-				last_metadata_flush_ = now;
-			}
+			of_jsonl_.flush();
+			last_metadata_flush_ = now;
 		}
 	}
 }
@@ -243,6 +246,16 @@ void Output::MetadataReady(libcamera::ControlList &metadata)
 {
 	if (!options_->Get().MetadataEnabled())
 		return;
+
+	// JSONL writing is independent of the encoder output callback (which may not fire on some
+	// libav muxed formats such as mpegts, or when there is no output file at all). Write the
+	// entry to disk immediately here. Legacy txt/json formats remain paired 1:1 with encoded
+	// frames via OutputReady.
+	if (options_->Get().metadata_format == "jsonl")
+	{
+		writeMetadataJsonl(metadata);
+		return;
+	}
 
 	metadata_queue_.push(metadata);
 }
